@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS conversas (
+  id SERIAL PRIMARY KEY,
+  mensagem TEXT,
+  resposta TEXT,
+  data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
