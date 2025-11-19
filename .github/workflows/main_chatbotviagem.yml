@@ -39,6 +39,13 @@ jobs:
           cd backend/python
           zip -r ../../python-app.zip . -x "antenv/*"
           cd ../..
+          mkdir -p deploy_package/frontend
+          unzip python-app.zip -d deploy_package
+          cp -r frontend/webchat deploy_package/frontend/
+          cd deploy_package
+          zip -r ../python-app.zip .
+          cd ..
+          rm -rf deploy_package
           
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
