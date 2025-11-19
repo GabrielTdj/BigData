@@ -8,7 +8,23 @@ import bot
 import os
 import sys
 
-app = Flask(__name__, static_folder='../../frontend/webchat', static_url_path='')
+# Detectar diretório do frontend automaticamente
+current_dir = os.path.dirname(os.path.abspath(__file__))
+frontend_path = os.path.join(current_dir, '..', '..', 'frontend', 'webchat')
+
+# Se não existir, tentar caminho alternativo (Azure deploy)
+if not os.path.exists(frontend_path):
+    frontend_path = os.path.join(os.path.dirname(current_dir), 'frontend', 'webchat')
+
+if not os.path.exists(frontend_path):
+    frontend_path = os.path.join(current_dir, 'frontend', 'webchat')
+
+print(f"[STARTUP] Frontend path: {frontend_path}", flush=True)
+print(f"[STARTUP] Frontend exists: {os.path.exists(frontend_path)}", flush=True)
+if os.path.exists(frontend_path):
+    print(f"[STARTUP] Files: {os.listdir(frontend_path)}", flush=True)
+
+app = Flask(__name__, static_folder=frontend_path, static_url_path='')
 CORS(app)
 
 @app.route('/api/chat', methods=['POST'])
@@ -43,7 +59,26 @@ def health():
 @app.route('/', methods=['GET'])
 def index():
     """Serve frontend HTML"""
-    return send_from_directory(app.static_folder, 'index.html')
+    try:
+        if not os.path.exists(app.static_folder):
+            return jsonify({
+                'error': 'Frontend não encontrado',
+                'static_folder': app.static_folder,
+                'current_dir': os.getcwd(),
+                'files_in_root': os.listdir('.')[:20]
+            }), 404
+        
+        index_path = os.path.join(app.static_folder, 'index.html')
+        if not os.path.exists(index_path):
+            return jsonify({
+                'error': 'index.html não encontrado',
+                'static_folder': app.static_folder,
+                'files_in_static': os.listdir(app.static_folder)
+            }), 404
+            
+        return send_from_directory(app.static_folder, 'index.html')
+    except Exception as e:
+        return jsonify({'error': str(e), 'static_folder': app.static_folder}), 500
 
 @app.route('/api', methods=['GET'])
 def api_info():
