@@ -4,16 +4,27 @@ import azure_config
 
 class TextAnalytics:
     def __init__(self):
-        if not azure_config.TEXT_ANALYTICS_ENDPOINT or not azure_config.TEXT_ANALYTICS_KEY:
+        try:
+            if not azure_config.TEXT_ANALYTICS_ENDPOINT or not azure_config.TEXT_ANALYTICS_KEY:
+                self.client = None
+                print('[WARN] Text Analytics não configurado', flush=True)
+                return
+            
+            self.client = TextAnalyticsClient(
+                endpoint=azure_config.TEXT_ANALYTICS_ENDPOINT, 
+                credential=AzureKeyCredential(azure_config.TEXT_ANALYTICS_KEY)
+            )
+            print('[INFO] Text Analytics conectado', flush=True)
+        except Exception as e:
+            print(f'[ERROR] Text Analytics init failed: {str(e)}', flush=True)
             self.client = None
-            return
-        self.client = TextAnalyticsClient(endpoint=azure_config.TEXT_ANALYTICS_ENDPOINT, credential=AzureKeyCredential(azure_config.TEXT_ANALYTICS_KEY))
 
     def analyze_sentiment(self, text):
         if not self.client:
             return None
+        
         try:
-            response = self.client.analyze_sentiment([text])[0]
+            response = self.client.analyze_sentiment([text[:500]])[0]  # Limitar tamanho
             return {
                 'sentiment': response.sentiment,
                 'scores': {
@@ -23,4 +34,5 @@ class TextAnalytics:
                 }
             }
         except Exception as e:
-            return {'error': str(e)}
+            print(f'[ERROR] Sentiment analysis failed: {str(e)[:100]}', flush=True)
+            return None

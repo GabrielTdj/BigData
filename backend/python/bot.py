@@ -9,11 +9,16 @@ import amadeus_client
 import re
 from datetime import datetime, timedelta
 
-# Inicializar clientes
-clu = luis_client.CluClient()
-text_analytics = text_analytics_client.TextAnalytics()
-store = cosmos_client.ConversationStore()
-amadeus = amadeus_client.AmadeusClient()
+# Inicializar clientes com tratamento de erros
+try:
+    clu = luis_client.CluClient()
+    text_analytics = text_analytics_client.TextAnalytics()
+    store = cosmos_client.ConversationStore()
+    amadeus = amadeus_client.AmadeusClient()
+    print('[STARTUP] Todos os clientes inicializados', flush=True)
+except Exception as e:
+    print(f'[ERROR] Falha ao inicializar clientes: {str(e)}', flush=True)
+    raise
 
 # Intents suportados
 FLIGHT_INTENTS = ['ComprarVoos', 'ConsultarVoos', 'CancelarVoos']
@@ -205,239 +210,271 @@ def extract_detailed_info(text):
 
 def handle_message(user_id, text):
     """Processa mensagem com contexto e máquina de estados"""
-    # Salvar mensagem do usuário
-    sentiment = text_analytics.analyze_sentiment(text) if text_analytics.client else None
-    store.save_message(user_id, text, 'user', sentiment=sentiment)
+    try:
+        # Salvar mensagem do usuário
+        sentiment = None
+        if text_analytics and text_analytics.client:
+            sentiment = text_analytics.analyze_sentiment(text)
+        
+        if store and store.client:
+            store.save_message(user_id, text, 'user', sentiment=sentiment)
 
-    # Obter contexto do usuário
-    context = get_user_context(user_id)
-    current_state = context['state']
-    
-    # Extrair informações da mensagem
-    detailed_info = extract_detailed_info(text)
-    
-    # Atualizar dados do contexto com novas informações
-    context['data'].update({k: v for k, v in detailed_info.items() if v})
-    
-    # Reconhecer intent via CLU
-    clu_res = clu.recognize(text)
-    if 'error' in clu_res:
-        reply = {'text': 'Desculpe, estou com problemas técnicos. Tente novamente em instantes.'}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-
-    intent, entities = extract_intent_entities(clu_res)
-    
-    # Adicionar entidades ao contexto
-    if entities.get('Cidade'):
-        context['data']['cidade'] = entities['Cidade']
-    if entities.get('Destino'):
-        context['data']['cidade'] = entities['Destino']
-    if entities.get('Origem'):
-        context['data']['origem'] = entities['Origem']
-    
-    # Máquina de estados conversacional
-    if current_state == CONVERSATION_STATES['IDLE']:
-        # Estado inicial - processar novo intent
-        if intent in FLIGHT_INTENTS:
-            return handle_flight_conversation(user_id, intent, context, text)
-        elif intent in HOTEL_INTENTS:
-            return handle_hotel_conversation(user_id, intent, context, text)
-        else:
-            reply = {'text': "Olá! 👋 Sou seu assistente de viagens.\n\nPosso ajudar com:\n\n✈️ Voos - Consultar, comprar ou cancelar\n🏨 Hotéis - Reservar, consultar ou cancelar\n\nO que você precisa hoje?"}
-            store.save_message(user_id, reply['text'], 'bot')
+        # Obter contexto do usuário
+        context = get_user_context(user_id)
+        current_state = context['state']
+        
+        # Extrair informações da mensagem
+        detailed_info = extract_detailed_info(text)
+        
+        # Atualizar dados do contexto com novas informações
+        context['data'].update({k: v for k, v in detailed_info.items() if v})
+        
+        # Reconhecer intent via CLU
+        clu_res = clu.recognize(text)
+        if 'error' in clu_res:
+            print(f'[WARN] CLU error: {clu_res["error"]}', flush=True)
+            reply = {'text': 'Desculpe, estou com problemas técnicos. Tente novamente em instantes.'}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
             return reply
+
+        intent, entities = extract_intent_entities(clu_res)
+        
+        # Adicionar entidades ao contexto
+        if entities.get('Cidade'):
+            context['data']['cidade'] = entities['Cidade']
+        if entities.get('Destino'):
+            context['data']['cidade'] = entities['Destino']
+        if entities.get('Origem'):
+            context['data']['origem'] = entities['Origem']
+        
+        # Máquina de estados conversacional
+        if current_state == CONVERSATION_STATES['IDLE']:
+            # Estado inicial - processar novo intent
+            if intent in FLIGHT_INTENTS:
+                return handle_flight_conversation(user_id, intent, context, text)
+            elif intent in HOTEL_INTENTS:
+                return handle_hotel_conversation(user_id, intent, context, text)
+            else:
+                reply = {'text': "Olá! 👋 Sou seu assistente de viagens.\n\nPosso ajudar com:\n\n✈️ Voos - Consultar, comprar ou cancelar\n🏨 Hotéis - Reservar, consultar ou cancelar\n\nO que você precisa hoje?"}
+                if store and store.client:
+                    store.save_message(user_id, reply['text'], 'bot')
+                return reply
+        
+        elif current_state == CONVERSATION_STATES['WAITING_FLIGHT_SELECTION']:
+            return handle_flight_selection(user_id, context, detailed_info, text)
+        
+        elif current_state == CONVERSATION_STATES['WAITING_PAYMENT']:
+            return handle_payment_info(user_id, context, detailed_info)
+        
+        elif current_state == CONVERSATION_STATES['WAITING_HOTEL_DETAILS']:
+            return handle_hotel_conversation(user_id, 'ReservarHotel', context, text)
+        
+        elif current_state == CONVERSATION_STATES['WAITING_HOTEL_PAYMENT']:
+            return handle_hotel_payment(user_id, context, detailed_info)
+        
+        else:
+            # Estado desconhecido, resetar
+            context['state'] = CONVERSATION_STATES['IDLE']
+            return handle_message(user_id, text)
     
-    elif current_state == CONVERSATION_STATES['WAITING_FLIGHT_SELECTION']:
-        # Usuário deve selecionar um voo
-        return handle_flight_selection(user_id, context, detailed_info, text)
-    
-    elif current_state == CONVERSATION_STATES['WAITING_PAYMENT']:
-        # Usuário deve fornecer dados de pagamento
-        return handle_payment_info(user_id, context, detailed_info)
-    
-    elif current_state == CONVERSATION_STATES['WAITING_HOTEL_DETAILS']:
-        # Aguardando mais detalhes do hotel
-        return handle_hotel_conversation(user_id, 'ReservarHotel', context, text)
-    
-    elif current_state == CONVERSATION_STATES['WAITING_HOTEL_PAYMENT']:
-        # Usuário deve fornecer dados de pagamento do hotel
-        return handle_hotel_payment(user_id, context, detailed_info)
-    
-    else:
-        # Estado desconhecido, resetar
-        context['state'] = CONVERSATION_STATES['IDLE']
-        return handle_message(user_id, text)
+    except Exception as e:
+        print(f'[ERROR] handle_message failed: {str(e)}', flush=True)
+        return {'text': f'Erro: {str(e)[:100]}. Por favor, tente novamente.'}
 
 
 def handle_flight_conversation(user_id, intent, context, text):
     """Gerencia conversa de voos de forma inteligente"""
-    data = context['data']
-    
-    if intent == 'CancelarVoos':
-        context['state'] = CONVERSATION_STATES['WAITING_CANCELLATION_INFO']
-        reply = {'text': '❌ Vou ajudar com o cancelamento do seu voo.\n\nPreciso de:\n📝 Número da reserva ou localizador\n🆔 CPF do titular\n\nPor favor, me informe esses dados.'}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
-    # Consultar ou Comprar Voos
-    cidade_destino = data.get('cidade')
-    origem = data.get('origem', 'São Paulo')
-    
-    if not cidade_destino:
-        reply = {'text': '✈️ Perfeito! Para buscar os melhores voos, preciso saber:\n\n📍 Para qual cidade você quer viajar?\n\nExemplo: "quero voo para Roma" ou "voo para janeiro" (Rio de Janeiro)'}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
-    # Buscar voos via Amadeus
-    dest_code = amadeus_client.get_iata_code(cidade_destino.lower())
-    
-    if not dest_code:
-        reply = {'text': f"🔍 Hmm, não encontrei '{cidade_destino}' no meu sistema.\n\nPor favor, especifique melhor a cidade ou país.\n\nExemplos: Lisboa, Dublin, Paris, Nova York, Rio de Janeiro"}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
-    # Buscar voos reais
-    data_ida = data.get('data_ida', (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'))
-    pessoas = data.get('pessoas', 1)
-    
-    result = amadeus.search_flights(origem, cidade_destino.lower(), data_ida, adults=pessoas)
-    
-    if result and isinstance(result, list) and len(result) > 0:
-        # Salvar ofertas no contexto
-        context['flight_offers'] = result[:5]
+    try:
+        data = context['data']
         
-        text = f"✈️ Encontrei {len(result)} voos de {origem} para {cidade_destino}!\n\n"
-        text += f"🗓️ Data: {data_ida}\n👥 Passageiros: {pessoas}\n\n"
-        text += "📋 Melhores opções:\n\n"
+        if intent == 'CancelarVoos':
+            context['state'] = CONVERSATION_STATES['WAITING_CANCELLATION_INFO']
+            reply = {'text': '❌ Vou ajudar com o cancelamento do seu voo.\n\nPreciso de:\n📝 Número da reserva ou localizador\n🆔 CPF do titular\n\nPor favor, me informe esses dados.'}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
         
-        for i, flight in enumerate(context['flight_offers'], 1):
-            price = flight.get('price', {})
-            price_total = price.get('total', 'N/A')
-            currency = price.get('currency', 'EUR')
+        # Consultar ou Comprar Voos
+        cidade_destino = data.get('cidade')
+        origem = data.get('origem', 'São Paulo')
+        
+        if not cidade_destino:
+            reply = {'text': '✈️ Perfeito! Para buscar os melhores voos, preciso saber:\n\n📍 Para qual cidade você quer viajar?\n\nExemplo: "quero voo para Roma" ou "voo para Rio de Janeiro"'}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
+        # Buscar voos via Amadeus
+        dest_code = amadeus_client.get_iata_code(cidade_destino.lower())
+        
+        if not dest_code:
+            reply = {'text': f"🔍 Hmm, não encontrei '{cidade_destino}' no meu sistema.\n\nPor favor, especifique melhor a cidade.\n\nExemplos: Lisboa, Dublin, Paris, Nova York, Rio de Janeiro"}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
+        # Buscar voos reais
+        data_ida = data.get('data_ida', (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'))
+        pessoas = data.get('pessoas', 1)
+        
+        result = amadeus.search_flights(origem, cidade_destino.lower(), data_ida, adults=pessoas)
+        
+        if result and isinstance(result, list) and len(result) > 0:
+            # Salvar ofertas no contexto
+            context['flight_offers'] = result[:5]
             
-            if currency == 'EUR':
-                price_brl = float(price_total) * 6.0
-                price_display = f"€{price_total} ≈ R$ {price_brl:,.0f}".replace(',', '.')
+            response_text = f"✈️ Encontrei {len(result)} voos de {origem} para {cidade_destino}!\n\n"
+            response_text += f"🗓️ Data: {data_ida}\n👥 Passageiros: {pessoas}\n\n"
+            response_text += "📋 Melhores opções:\n\n"
+            
+            for i, flight in enumerate(context['flight_offers'], 1):
+                price = flight.get('price', {})
+                price_total = price.get('total', 'N/A')
+                currency = price.get('currency', 'EUR')
+                
+                if currency == 'EUR':
+                    price_brl = float(price_total) * 6.0
+                    price_display = f"€{price_total} ≈ R$ {price_brl:,.0f}".replace(',', '.')
+                else:
+                    price_display = f"{currency} {price_total}"
+                
+                itineraries = flight.get('itineraries', [])
+                if itineraries:
+                    segments = itineraries[0].get('segments', [])
+                    if segments:
+                        carrier = segments[0].get('carrierCode', '??')
+                        departure = segments[0].get('departure', {}).get('at', '')
+                        time = departure[11:16] if len(departure) > 11 else '??:??'
+                        duration = itineraries[0].get('duration', '').replace('PT', '').replace('H', 'h').replace('M', 'm')
+                        
+                        response_text += f"{i}. {carrier} - Partida {time} - {price_display}"
+                        if duration:
+                            response_text += f" - {duration.lower()}"
+                        response_text += "\n"
+            
+            # Mudar estado para aguardar seleção
+            if intent == 'ComprarVoos':
+                context['state'] = CONVERSATION_STATES['WAITING_FLIGHT_SELECTION']
+                response_text += "\n\n💳 Para comprar: Digite o número do voo desejado (ex: 1, 2, 3...)"
             else:
-                price_display = f"{currency} {price_total}"
+                response_text += "\n\n📞 Gostou? Diga 'comprar voo [número]' para prosseguir!"
             
-            itineraries = flight.get('itineraries', [])
-            if itineraries:
-                segments = itineraries[0].get('segments', [])
-                if segments:
-                    carrier = segments[0].get('carrierCode', '??')
-                    departure = segments[0].get('departure', {}).get('at', '')
-                    time = departure[11:16] if len(departure) > 11 else '??:??'
-                    duration = itineraries[0].get('duration', '').replace('PT', '').replace('H', 'h').replace('M', 'm')
-                    
-                    text += f"{i}. {carrier} - Partida {time} - {price_display}"
-                    if duration:
-                        text += f" - {duration.lower()}"
-                    text += "\n"
+            reply = {'text': response_text}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
         
-        # Mudar estado para aguardar seleção
-        if intent == 'ComprarVoos':
-            context['state'] = CONVERSATION_STATES['WAITING_FLIGHT_SELECTION']
-            text += "\n\n💳 Para comprar: Digite o número do voo desejado (ex: 1, 2, 3...)"
         else:
-            text += "\n\n📞 Gostou? Diga 'comprar voo [número]' para prosseguir!"
-        
-        reply = {'text': text}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+            reply = {'text': f"😔 Não encontrei voos disponíveis para {cidade_destino} nesta data.\n\nPosso ajudar com:\n• Outra cidade\n• Outra data\n\nO que prefere?"}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
     
-    else:
-        reply = {'text': f"😔 Não encontrei voos disponíveis para {cidade_destino} nesta data.\n\nPosso ajudar com:\n• Outra cidade\n• Outra data\n\nO que prefere?"}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+    except Exception as e:
+        print(f'[ERROR] handle_flight_conversation: {str(e)}', flush=True)
+        return {'text': f'Erro ao buscar voos: {str(e)[:100]}'}
 
 
 def handle_flight_selection(user_id, context, detailed_info, text):
     """Processa seleção de voo pelo usuário"""
-    selecao = detailed_info.get('selecao')
-    
-    if not selecao or selecao > len(context['flight_offers']):
-        reply = {'text': f"Por favor, escolha um voo válido (1 a {len(context['flight_offers'])}).\n\nDigite apenas o número."}
-        store.save_message(user_id, reply['text'], 'bot')
+    try:
+        selecao = detailed_info.get('selecao')
+        
+        if not selecao or selecao > len(context['flight_offers']):
+            reply = {'text': f"Por favor, escolha um voo válido (1 a {len(context['flight_offers'])}).\n\nDigite apenas o número."}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
+        # Salvar voo selecionado
+        selected_flight = context['flight_offers'][selecao - 1]
+        context['data']['voo_selecionado'] = selected_flight
+        context['data']['numero_voo'] = selecao
+        
+        # Extrair informações do voo
+        price = selected_flight.get('price', {})
+        price_total = price.get('total', 'N/A')
+        currency = price.get('currency', 'EUR')
+        
+        if currency == 'EUR':
+            price_brl = float(price_total) * 6.0
+            price_display = f"€{price_total} (R$ {price_brl:,.0f})".replace(',', '.')
+        else:
+            price_display = f"{currency} {price_total}"
+        
+        # Solicitar dados de pagamento
+        context['state'] = CONVERSATION_STATES['WAITING_PAYMENT']
+        
+        reply = {'text': f"✅ Ótima escolha! Voo #{selecao} selecionado.\n\n💰 Valor: {price_display}\n\n📋 Para finalizar, preciso de:\n\n1️⃣ Nome completo do passageiro\n2️⃣ CPF\n3️⃣ Forma de pagamento (crédito/débito/PIX)\n\nPode enviar tudo em uma mensagem!"}
+        if store and store.client:
+            store.save_message(user_id, reply['text'], 'bot')
         return reply
     
-    # Salvar voo selecionado
-    selected_flight = context['flight_offers'][selecao - 1]
-    context['data']['voo_selecionado'] = selected_flight
-    context['data']['numero_voo'] = selecao
-    
-    # Extrair informações do voo
-    price = selected_flight.get('price', {})
-    price_total = price.get('total', 'N/A')
-    currency = price.get('currency', 'EUR')
-    
-    if currency == 'EUR':
-        price_brl = float(price_total) * 6.0
-        price_display = f"€{price_total} (R$ {price_brl:,.0f})".replace(',', '.')
-    else:
-        price_display = f"{currency} {price_total}"
-    
-    # Solicitar dados de pagamento
-    context['state'] = CONVERSATION_STATES['WAITING_PAYMENT']
-    
-    reply = {'text': f"✅ Ótima escolha! Voo #{selecao} selecionado.\n\n💰 Valor: {price_display}\n\n📋 Para finalizar, preciso de:\n\n1️⃣ Nome completo do passageiro\n2️⃣ CPF\n3️⃣ Forma de pagamento (crédito/débito/PIX)\n\nPode enviar tudo em uma mensagem!"}
-    store.save_message(user_id, reply['text'], 'bot')
-    return reply
+    except Exception as e:
+        print(f'[ERROR] handle_flight_selection: {str(e)}', flush=True)
+        return {'text': f'Erro: {str(e)[:100]}'}
 
 
 def handle_payment_info(user_id, context, detailed_info):
     """Processa informações de pagamento"""
-    nome = detailed_info.get('nome') or context['data'].get('nome')
-    cpf = detailed_info.get('cpf') or context['data'].get('cpf')
-    pagamento = detailed_info.get('pagamento') or context['data'].get('pagamento')
-    
-    # Atualizar dados
-    if nome:
-        context['data']['nome'] = nome
-    if cpf:
-        context['data']['cpf'] = cpf
-    if pagamento:
-        context['data']['pagamento'] = pagamento
-    
-    # Verificar se temos todos os dados
-    if context['data'].get('nome') and context['data'].get('cpf') and context['data'].get('pagamento'):
-        # Confirmar reserva
-        voo = context['data']['voo_selecionado']
-        price = voo.get('price', {})
+    try:
+        nome = detailed_info.get('nome') or context['data'].get('nome')
+        cpf = detailed_info.get('cpf') or context['data'].get('cpf')
+        pagamento = detailed_info.get('pagamento') or context['data'].get('pagamento')
         
-        if price.get('currency') == 'EUR':
-            price_brl = float(price.get('total')) * 6.0
-            price_display = f"R$ {price_brl:,.0f}".replace(',', '.')
+        # Atualizar dados
+        if nome:
+            context['data']['nome'] = nome
+        if cpf:
+            context['data']['cpf'] = cpf
+        if pagamento:
+            context['data']['pagamento'] = pagamento
+        
+        # Verificar se temos todos os dados
+        if context['data'].get('nome') and context['data'].get('cpf') and context['data'].get('pagamento'):
+            # Confirmar reserva
+            voo = context['data']['voo_selecionado']
+            price = voo.get('price', {})
+            
+            if price.get('currency') == 'EUR':
+                price_brl = float(price.get('total')) * 6.0
+                price_display = f"R$ {price_brl:,.0f}".replace(',', '.')
+            else:
+                price_display = f"{price.get('currency')} {price.get('total')}"
+            
+            # Gerar número de reserva
+            reserva_num = f"VOO{context['data']['cpf'][-4:]}{datetime.now().strftime('%d%m%H%M')}"
+            
+            reply = {'text': f"🎉 Reserva confirmada com sucesso!\n\n📋 Resumo:\n✈️ Voo #{context['data']['numero_voo']}\n👤 {context['data']['nome']}\n🆔 CPF: {context['data']['cpf']}\n💳 {context['data']['pagamento']}\n💰 Total: {price_display}\n\n🎫 Número da reserva: {reserva_num}\n\n✅ Você receberá a confirmação por e-mail em instantes!\n\n🙏 Obrigado por escolher nossos serviços. Boa viagem!"}
+            
+            # Resetar contexto
+            context['state'] = CONVERSATION_STATES['IDLE']
+            context['data'] = {}
+            context['flight_offers'] = []
+            
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
         else:
-            price_display = f"{price.get('currency')} {price.get('total')}"
-        
-        # Gerar número de reserva
-        reserva_num = f"VOO{context['data']['cpf'][-4:]}{datetime.now().strftime('%d%m%H%M')}"
-        
-        reply = {'text': f"🎉 Reserva confirmada com sucesso!\n\n📋 Resumo:\n✈️ Voo #{context['data']['numero_voo']}\n👤 {context['data']['nome']}\n🆔 CPF: {context['data']['cpf']}\n💳 {context['data']['pagamento']}\n💰 Total: {price_display}\n\n🎫 Número da reserva: {reserva_num}\n\n✅ Você receberá a confirmação por e-mail em instantes!\n\n🙏 Obrigado por escolher nossos serviços. Boa viagem!"}
-        
-        # Resetar contexto
-        context['state'] = CONVERSATION_STATES['IDLE']
-        context['data'] = {}
-        context['flight_offers'] = []
-        
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+            # Ainda faltam dados
+            missing = []
+            if not context['data'].get('nome'):
+                missing.append('👤 Nome completo')
+            if not context['data'].get('cpf'):
+                missing.append('🆔 CPF')
+            if not context['data'].get('pagamento'):
+                missing.append('💳 Forma de pagamento')
+            
+            reply = {'text': f"Quase lá! Ainda preciso de:\n\n" + '\n'.join(missing) + "\n\nEnvie tudo em uma mensagem para agilizar!"}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
     
-    else:
-        # Ainda faltam dados
-        missing = []
-        if not context['data'].get('nome'):
-            missing.append('👤 Nome completo')
-        if not context['data'].get('cpf'):
-            missing.append('🆔 CPF')
-        if not context['data'].get('pagamento'):
-            missing.append('💳 Forma de pagamento')
-        
-        reply = {'text': f"Quase lá! Ainda preciso de:\n\n" + '\n'.join(missing) + "\n\nEnvie tudo em uma mensagem para agilizar!"}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+    except Exception as e:
+        print(f'[ERROR] handle_payment_info: {str(e)}', flush=True)
+        return {'text': f'Erro: {str(e)[:100]}'}
 
 
 def extract_intent_entities(clu_response):
@@ -461,63 +498,65 @@ def extract_intent_entities(clu_response):
 
 def handle_hotel_conversation(user_id, intent, context, text):
     """Gerencia conversa de hotéis de forma inteligente"""
-    data = context['data']
-    
-    if intent == 'CancelarHotel':
-        reply = {'text': '❌ Vou ajudar com o cancelamento da sua reserva de hotel.\n\nPreciso de:\n📝 Número da reserva\n👤 Nome do titular\n🆔 CPF\n\nPor favor, me informe esses dados.'}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
-    # Consultar ou Reservar Hotel
-    cidade = data.get('cidade')
-    checkin = data.get('checkin')
-    checkout = data.get('checkout')
-    pessoas = data.get('pessoas')
-    
-    # Verificar informações necessárias
-    if not cidade:
-        reply = {'text': '🏨 Perfeito! Para buscar os melhores hotéis, preciso saber:\n\n📍 Em qual cidade?\n📅 Check-in? (DD/MM/YYYY)\n📅 Check-out? (DD/MM/YYYY)\n👥 Quantas pessoas?\n\nPode enviar tudo em uma mensagem!'}
-        store.save_message(user_id, reply['text'], 'bot')
-        context['state'] = CONVERSATION_STATES['WAITING_HOTEL_DETAILS']
-        return reply
-    
-    if not checkin or not checkout:
-        reply = {'text': f"Ótimo! Hotel em **{cidade}**.\n\nAinda preciso de:\n\n📅 Data check-in (DD/MM/YYYY)\n📅 Data check-out (DD/MM/YYYY)" + (f"\n👥 Número de pessoas" if not pessoas else "") + "\n\n💡 _Envie as datas em uma mensagem!_"}
-        store.save_message(user_id, reply['text'], 'bot')
-        context['state'] = CONVERSATION_STATES['WAITING_HOTEL_DETAILS']
-        return reply
-    
-    if not pessoas:
-        pessoas = 1
-        data['pessoas'] = 1
-    
-    # Buscar hotéis via Amadeus
-    city_code = amadeus_client.get_iata_code(cidade.lower())
-    
-    if not city_code:
-        reply = {'text': f"🔍 Não encontrei '{cidade}' no sistema.\n\nTente: Lisboa, Paris, Dublin, Nova York, Rio de Janeiro..."}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
     try:
-        print(f"[DEBUG] Buscando hotéis: city_code={city_code}, checkin={checkin}, checkout={checkout}")
-        result = amadeus.search_hotels(city_code, checkin, checkout, roomQuantity=1)
-        print(f"[DEBUG] Resultado hotéis: {type(result)} - {result if not isinstance(result, list) else f'{len(result)} hotéis'}")
+        data = context['data']
         
-        # Verificar se retornou erro
+        if intent == 'CancelarHotel':
+            reply = {'text': '❌ Vou ajudar com o cancelamento da sua reserva de hotel.\n\nPreciso de:\n📝 Número da reserva\n👤 Nome do titular\n🆔 CPF\n\nPor favor, me informe esses dados.'}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
+        # Consultar ou Reservar Hotel
+        cidade = data.get('cidade')
+        checkin = data.get('checkin')
+        checkout = data.get('checkout')
+        pessoas = data.get('pessoas')
+        
+        # Verificar informações necessárias
+        if not cidade:
+            reply = {'text': '🏨 Perfeito! Para buscar os melhores hotéis, preciso saber:\n\n📍 Em qual cidade?\n📅 Check-in? (DD/MM/YYYY)\n📅 Check-out? (DD/MM/YYYY)\n👥 Quantas pessoas?\n\nPode enviar tudo em uma mensagem!'}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            context['state'] = CONVERSATION_STATES['WAITING_HOTEL_DETAILS']
+            return reply
+        
+        if not checkin or not checkout:
+            reply = {'text': f"Ótimo! Hotel em {cidade}.\n\nAinda preciso de:\n\n📅 Data check-in (DD/MM/YYYY)\n📅 Data check-out (DD/MM/YYYY)" + (f"\n👥 Número de pessoas" if not pessoas else "") + "\n\n💡 Envie as datas em uma mensagem!"}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            context['state'] = CONVERSATION_STATES['WAITING_HOTEL_DETAILS']
+            return reply
+        
+        if not pessoas:
+            pessoas = 1
+            data['pessoas'] = 1
+        
+        # Buscar hotéis via Amadeus
+        city_code = amadeus_client.get_iata_code(cidade.lower())
+        
+        if not city_code:
+            reply = {'text': f"🔍 Não encontrei '{cidade}' no sistema.\n\nTente: Lisboa, Paris, Dublin, Nova York, Rio de Janeiro..."}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+        
+        result = amadeus.search_hotels(city_code, checkin, checkout, roomQuantity=1)
+        
         if isinstance(result, dict) and 'error' in result:
             error_msg = result['error']
-            print(f"[ERROR] Amadeus API error: {error_msg}")
-            reply = {'text': f"❌ Erro da API Amadeus: {error_msg}\n\nTente:\n• Outra cidade\n• Outras datas"}
-            store.save_message(user_id, reply['text'], 'bot')
+            print(f"[ERROR] Amadeus API error: {error_msg}", flush=True)
+            reply = {'text': f"❌ Erro: {error_msg}\n\nTente:\n• Outra cidade\n• Outras datas"}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
             return reply
         
         if result and isinstance(result, list) and len(result) > 0:
             context['hotel_offers'] = result[:5]
             
-            text = f"🏨 Encontrei {len(result)} hotéis em {cidade}!\n\n"
-            text += f"📅 {checkin} até {checkout}\n👥 {pessoas} pessoa(s)\n\n"
-            text += "🏆 Melhores opções:\n\n"
+            response_text = f"🏨 Encontrei {len(result)} hotéis em {cidade}!\n\n"
+            response_text += f"📅 {checkin} até {checkout}\n👥 {pessoas} pessoa(s)\n\n"
+            response_text += "🏆 Melhores opções:\n\n"
             
             for i, hotel in enumerate(context['hotel_offers'], 1):
                 name = hotel.get('hotel', {}).get('name', 'Hotel')
@@ -533,113 +572,127 @@ def handle_hotel_conversation(user_id, intent, context, text):
                     else:
                         price_display = f"{currency} {total}/noite"
                     
-                    text += f"{i}. {name}\n   {price_display}\n\n"
+                    response_text += f"{i}. {name}\n   {price_display}\n\n"
             
             if intent == 'ReservarHotel':
                 context['state'] = CONVERSATION_STATES['WAITING_HOTEL_PAYMENT']
-                text += "💳 Para reservar: Digite o número do hotel\n\nDepois precisarei de: nome, CPF e forma de pagamento"
+                response_text += "💳 Para reservar: Digite o número do hotel\n\nDepois precisarei de: nome, CPF e forma de pagamento"
             else:
-                text += "📞 Gostou? Diga 'reservar hotel [número]'"
+                response_text += "📞 Gostou? Diga 'reservar hotel [número]'"
             
-            reply = {'text': text}
-            store.save_message(user_id, reply['text'], 'bot')
+            reply = {'text': response_text}
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
             return reply
         
         else:
             reply = {'text': f"😔 Não encontrei hotéis disponíveis em {cidade} para essas datas.\n\nPosso ajudar com:\n• Outra cidade\n• Outras datas"}
-            store.save_message(user_id, reply['text'], 'bot')
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
             return reply
     
     except Exception as e:
-        print(f"[ERROR] Erro ao buscar hotéis: {str(e)}")
-        reply = {'text': f"❌ Erro ao buscar hotéis: {str(e)[:100]}\n\nVerifique:\n• Cidade digitada corretamente\n• Datas válidas (formato DD/MM/YYYY)\n• Tente novamente em alguns segundos"}
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+        print(f'[ERROR] handle_hotel_conversation: {str(e)}', flush=True)
+        return {'text': f'Erro ao buscar hotéis: {str(e)[:100]}'}
 
 
 def handle_hotel_payment(user_id, context, detailed_info):
     """Processa pagamento e confirmação de hotel"""
-    # Verificar seleção de hotel
-    selecao = detailed_info.get('selecao')
-    
-    if selecao and selecao <= len(context.get('hotel_offers', [])):
-        context['data']['hotel_selecionado'] = context['hotel_offers'][selecao - 1]
-        context['data']['numero_hotel'] = selecao
-    
-    # Atualizar dados de pagamento
-    if detailed_info.get('nome'):
-        context['data']['nome'] = detailed_info['nome']
-    if detailed_info.get('cpf'):
-        context['data']['cpf'] = detailed_info['cpf']
-    if detailed_info.get('pagamento'):
-        context['data']['pagamento'] = detailed_info['pagamento']
-    
-    # Verificar se temos todos os dados
-    if (context['data'].get('hotel_selecionado') and 
-        context['data'].get('nome') and 
-        context['data'].get('cpf') and 
-        context['data'].get('pagamento')):
+    try:
+        # Verificar seleção de hotel
+        selecao = detailed_info.get('selecao')
         
-        hotel = context['data']['hotel_selecionado']
-        hotel_name = hotel.get('hotel', {}).get('name', 'Hotel')
+        if selecao and selecao <= len(context.get('hotel_offers', [])):
+            context['data']['hotel_selecionado'] = context['hotel_offers'][selecao - 1]
+            context['data']['numero_hotel'] = selecao
         
-        offers = hotel.get('offers', [])
-        if offers:
-            price = offers[0].get('price', {})
-            total = float(price.get('total', 0))
-            currency = price.get('currency', 'EUR')
+        # Atualizar dados de pagamento
+        if detailed_info.get('nome'):
+            context['data']['nome'] = detailed_info['nome']
+        if detailed_info.get('cpf'):
+            context['data']['cpf'] = detailed_info['cpf']
+        if detailed_info.get('pagamento'):
+            context['data']['pagamento'] = detailed_info['pagamento']
+        
+        # Verificar se temos todos os dados
+        if (context['data'].get('hotel_selecionado') and 
+            context['data'].get('nome') and 
+            context['data'].get('cpf') and 
+            context['data'].get('pagamento')):
             
-            if currency == 'EUR':
-                price_brl = total * 6.0
-                price_display = f"R$ {price_brl:.0f}"
+            hotel = context['data']['hotel_selecionado']
+            hotel_name = hotel.get('hotel', {}).get('name', 'Hotel')
+            
+            offers = hotel.get('offers', [])
+            if offers:
+                price = offers[0].get('price', {})
+                total = float(price.get('total', 0))
+                currency = price.get('currency', 'EUR')
+                
+                if currency == 'EUR':
+                    price_brl = total * 6.0
+                    price_display = f"R$ {price_brl:.0f}"
+                else:
+                    price_display = f"{currency} {total}"
             else:
-                price_display = f"{currency} {total}"
-        else:
-            price_display = "N/A"
-        
-        reserva_num = f"HTL{context['data']['cpf'][-4:]}{datetime.now().strftime('%d%m%H%M')}"
-        
-        reply = {'text': f"🎉 Reserva confirmada com sucesso!\n\n📋 Resumo:\n🏨 {hotel_name}\n📍 {context['data']['cidade']}\n📅 {context['data']['checkin']} até {context['data']['checkout']}\n👥 {context['data']['pessoas']} pessoa(s)\n\n👤 {context['data']['nome']}\n🆔 {context['data']['cpf']}\n💳 {context['data']['pagamento']}\n💰 Total: {price_display}\n\n🎫 Número da reserva: {reserva_num}\n\n✅ Confirmação enviada por e-mail!\n\n🙏 Ótima estadia!"}
-        
-        # Resetar contexto
-        context['state'] = CONVERSATION_STATES['IDLE']
-        context['data'] = {}
-        context['hotel_offers'] = []
-        
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
-    
-    else:
-        # Solicitar dados faltantes
-        if not context['data'].get('hotel_selecionado'):
-            reply = {'text': f"Por favor, escolha um hotel (1 a {len(context.get('hotel_offers', []))}).\n\nDigite o número."}
-        else:
-            missing = []
-            if not context['data'].get('nome'):
-                missing.append('👤 Nome completo')
-            if not context['data'].get('cpf'):
-                missing.append('🆔 CPF')
-            if not context['data'].get('pagamento'):
-                missing.append('💳 Forma de pagamento (crédito/débito/PIX)')
+                price_display = "N/A"
             
-            reply = {'text': f"Quase lá! Ainda preciso de:\n\n" + '\n'.join(missing) + "\n\nEnvie tudo em uma mensagem!"}
+            reserva_num = f"HTL{context['data']['cpf'][-4:]}{datetime.now().strftime('%d%m%H%M')}"
+            
+            reply = {'text': f"🎉 Reserva confirmada com sucesso!\n\n📋 Resumo:\n🏨 {hotel_name}\n📍 {context['data']['cidade']}\n📅 {context['data']['checkin']} até {context['data']['checkout']}\n👥 {context['data']['pessoas']} pessoa(s)\n\n👤 {context['data']['nome']}\n🆔 {context['data']['cpf']}\n💳 {context['data']['pagamento']}\n💰 Total: {price_display}\n\n🎫 Número da reserva: {reserva_num}\n\n✅ Confirmação enviada por e-mail!\n\n🙏 Ótima estadia!"}
+            
+            # Resetar contexto
+            context['state'] = CONVERSATION_STATES['IDLE']
+            context['data'] = {}
+            context['hotel_offers'] = []
+            
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
         
-        store.save_message(user_id, reply['text'], 'bot')
-        return reply
+        else:
+            # Solicitar dados faltantes
+            if not context['data'].get('hotel_selecionado'):
+                reply = {'text': f"Por favor, escolha um hotel (1 a {len(context.get('hotel_offers', []))}).\n\nDigite o número."}
+            else:
+                missing = []
+                if not context['data'].get('nome'):
+                    missing.append('👤 Nome completo')
+                if not context['data'].get('cpf'):
+                    missing.append('🆔 CPF')
+                if not context['data'].get('pagamento'):
+                    missing.append('💳 Forma de pagamento (crédito/débito/PIX)')
+                
+                reply = {'text': f"Quase lá! Ainda preciso de:\n\n" + '\n'.join(missing) + "\n\nEnvie tudo em uma mensagem!"}
+            
+            if store and store.client:
+                store.save_message(user_id, reply['text'], 'bot')
+            return reply
+    
+    except Exception as e:
+        print(f'[ERROR] handle_hotel_payment: {str(e)}', flush=True)
+        return {'text': f'Erro: {str(e)[:100]}'}
 
 
 def rest_handle(req_json):
     """Handler para requisições REST (usado pelo Flask)"""
-    user_id = req_json.get('userId', 'anonymous')
-    text = req_json.get('message', '')
+    try:
+        user_id = req_json.get('userId', 'anonymous')
+        text = req_json.get('message', '').strip()
+        
+        if not text:
+            return {'response': 'Mensagem vazia', 'error': True}
+        
+        result = handle_message(user_id, text)
+        return {'response': result.get('text', 'Erro desconhecido')}
     
-    if not text:
-        return {'response': 'Mensagem vazia', 'error': True}
-    
-    result = handle_message(user_id, text)
-    return {'response': result.get('text', '')}
+    except Exception as e:
+        print(f'[ERROR] rest_handle: {str(e)}', flush=True)
+        return {'response': f'Erro interno: {str(e)[:100]}', 'error': True}
 
 
 if __name__ == '__main__':
     # Manual test
-    print(rest_handle({'userId': 'test1', 'message': 'Quero voo para Roma'}))
+    print('[TEST] Testando bot...')
+    print(rest_handle({'userId': 'test1', 'message': 'Olá'}))
+    print(rest_handle({'userId': 'test1', 'message': 'Quero voo para Lisboa'}))

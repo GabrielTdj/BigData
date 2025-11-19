@@ -5,26 +5,41 @@ from datetime import datetime
 
 class ConversationStore:
     def __init__(self):
-        if not azure_config.COSMOS_ENDPOINT or not azure_config.COSMOS_KEY:
+        try:
+            if not azure_config.COSMOS_ENDPOINT or not azure_config.COSMOS_KEY:
+                self.client = None
+                print('[WARN] Cosmos DB não configurado', flush=True)
+                return
+            
+            self.client = CosmosClient(azure_config.COSMOS_ENDPOINT, credential=azure_config.COSMOS_KEY)
+            self.db = self.client.create_database_if_not_exists(id=azure_config.COSMOS_DATABASE)
+            self.container = self.db.create_container_if_not_exists(
+                id=azure_config.COSMOS_CONTAINER, 
+                partition_key=PartitionKey(path="/userId")
+            )
+            print('[INFO] Cosmos DB conectado', flush=True)
+        except Exception as e:
+            print(f'[ERROR] Cosmos DB init failed: {str(e)}', flush=True)
             self.client = None
-            return
-        self.client = CosmosClient(azure_config.COSMOS_ENDPOINT, credential=azure_config.COSMOS_KEY)
-        self.db = self.client.create_database_if_not_exists(id=azure_config.COSMOS_DATABASE)
-        self.container = self.db.create_container_if_not_exists(id=azure_config.COSMOS_CONTAINER, partition_key=PartitionKey(path="/userId"))
 
     def save_message(self, userId, message, role, sentiment=None, metadata=None):
         if not self.client:
             return None
-        item = {
-            'id': str(uuid.uuid4()),
-            'userId': userId,
-            'role': role,
-            'message': message,
-            'sentiment': sentiment,
-            'metadata': metadata,
-            'timestamp': datetime.utcnow().isoformat()
-        }
-        return self.container.create_item(body=item)
+        
+        try:
+            item = {
+                'id': str(uuid.uuid4()),
+                'userId': userId,
+                'role': role,
+                'message': message[:500],  # Limitar tamanho
+                'sentiment': sentiment,
+                'metadata': metadata,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            return self.container.create_item(body=item)
+        except Exception as e:
+            print(f'[ERROR] Cosmos save failed: {str(e)[:100]}', flush=True)
+            return None
     
     def get_conversation_context(self, userId, limit=10):
         """Recupera as últimas mensagens da conversa para contexto"""
@@ -38,9 +53,8 @@ class ConversationStore:
                 parameters=[{"name": "@userId", "value": userId}],
                 enable_cross_partition_query=True
             ))
-            # Retornar em ordem cronológica (mais antiga primeiro)
             return list(reversed(items))
         except Exception as e:
-            print(f"Erro ao buscar contexto: {e}")
+            print(f'[ERROR] Cosmos query failed: {str(e)[:100]}', flush=True)
             return []
 

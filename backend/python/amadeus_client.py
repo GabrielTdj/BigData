@@ -114,9 +114,7 @@ class AmadeusClient:
         if not self.client:
             return {'error': 'Amadeus credentials not set'}
         
-        # FALLBACK: API Amadeus retorna 400 para hotéis (limitação de conta teste)
-        # Retornar dados simulados realistas para demonstração
-        print(f"[INFO] Usando dados simulados para hotéis (Amadeus API retorna 400 em conta teste)")
+        print(f"[INFO] Usando dados simulados para hotéis (Amadeus API limitada)", flush=True)
         
         # Simulação realista baseada na cidade
         city_hotels = {
@@ -127,12 +125,19 @@ class AmadeusClient:
                 {'name': 'Hotel do Chiado', 'price': 110},
                 {'name': 'Browns Downtown Hotel', 'price': 75}
             ],
-            'PAR': [
+            'CDG': [
                 {'name': 'Hotel Eiffel Trocadéro', 'price': 150},
                 {'name': 'Le Marais Boutique Hotel', 'price': 130},
                 {'name': 'Montmartre Hotel', 'price': 95},
                 {'name': 'Latin Quarter Hotel', 'price': 110},
                 {'name': 'Champs Elysées Plaza', 'price': 180}
+            ],
+            'FCO': [
+                {'name': 'Hotel Artemide', 'price': 140},
+                {'name': 'Hotel Forum', 'price': 130},
+                {'name': 'Hotel Centrale', 'price': 95},
+                {'name': 'NH Collection Palazzo Cinquecento', 'price': 150},
+                {'name': 'Hotel Quirinale', 'price': 120}
             ],
             'SCL': [
                 {'name': 'Hotel Plaza San Francisco', 'price': 100},
@@ -147,6 +152,13 @@ class AmadeusClient:
                 {'name': 'The Marker Hotel', 'price': 150},
                 {'name': 'Clayton Hotel Burlington Road', 'price': 95},
                 {'name': 'The Morrison Hotel', 'price': 110}
+            ],
+            'GIG': [
+                {'name': 'Copacabana Palace', 'price': 250},
+                {'name': 'Hotel Fasano Rio de Janeiro', 'price': 280},
+                {'name': 'Belmond Copacabana Palace', 'price': 300},
+                {'name': 'Porto Bay Rio Internacional', 'price': 150},
+                {'name': 'Hotel Atlantico Copacabana', 'price': 120}
             ]
         }
         
