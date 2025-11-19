@@ -1,5 +1,5 @@
 // Chat Application
-const API_URL = 'http://localhost:5000/api/chat';
+const API_URL = 'https://chatbotviagem-eva3g9gxe7edbxde.eastus2-01.azurewebsites.net/api/chat';
 const messagesContainer = document.getElementById('chat-messages');
 const inputField = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
