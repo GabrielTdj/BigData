@@ -114,81 +114,17 @@ class AmadeusClient:
         if not self.client:
             return {'error': 'Amadeus credentials not set'}
         
-        print(f"[INFO] Usando dados simulados para hotéis (Amadeus API limitada)", flush=True)
-        
-        # Simulação realista baseada na cidade
-        city_hotels = {
-            'LIS': [
-                {'name': 'Hotel Avenida Palace', 'price': 120},
-                {'name': 'Memmo Alfama Hotel', 'price': 95},
-                {'name': 'Lisboa Carmo Hotel', 'price': 85},
-                {'name': 'Hotel do Chiado', 'price': 110},
-                {'name': 'Browns Downtown Hotel', 'price': 75}
-            ],
-            'CDG': [
-                {'name': 'Hotel Eiffel Trocadéro', 'price': 150},
-                {'name': 'Le Marais Boutique Hotel', 'price': 130},
-                {'name': 'Montmartre Hotel', 'price': 95},
-                {'name': 'Latin Quarter Hotel', 'price': 110},
-                {'name': 'Champs Elysées Plaza', 'price': 180}
-            ],
-            'FCO': [
-                {'name': 'Hotel Artemide', 'price': 140},
-                {'name': 'Hotel Forum', 'price': 130},
-                {'name': 'Hotel Centrale', 'price': 95},
-                {'name': 'NH Collection Palazzo Cinquecento', 'price': 150},
-                {'name': 'Hotel Quirinale', 'price': 120}
-            ],
-            'SCL': [
-                {'name': 'Hotel Plaza San Francisco', 'price': 100},
-                {'name': 'The Singular Santiago', 'price': 140},
-                {'name': 'W Santiago', 'price': 160},
-                {'name': 'Hotel Cumbres Lastarria', 'price': 90},
-                {'name': 'NH Collection Plaza Santiago', 'price': 110}
-            ],
-            'DUB': [
-                {'name': 'The Merrion Hotel', 'price': 180},
-                {'name': 'Trinity City Hotel', 'price': 120},
-                {'name': 'The Marker Hotel', 'price': 150},
-                {'name': 'Clayton Hotel Burlington Road', 'price': 95},
-                {'name': 'The Morrison Hotel', 'price': 110}
-            ],
-            'GIG': [
-                {'name': 'Copacabana Palace', 'price': 250},
-                {'name': 'Hotel Fasano Rio de Janeiro', 'price': 280},
-                {'name': 'Belmond Copacabana Palace', 'price': 300},
-                {'name': 'Porto Bay Rio Internacional', 'price': 150},
-                {'name': 'Hotel Atlantico Copacabana', 'price': 120}
-            ]
-        }
-        
-        # Hotéis genéricos para cidades não mapeadas
-        default_hotels = [
-            {'name': f'Grand Hotel {cityCode}', 'price': 100},
-            {'name': f'{cityCode} Plaza Hotel', 'price': 120},
-            {'name': f'Central {cityCode} Hotel', 'price': 85},
-            {'name': f'{cityCode} Boutique Hotel', 'price': 95},
-            {'name': f'Downtown {cityCode} Hotel', 'price': 75}
-        ]
-        
-        hotels_data = city_hotels.get(cityCode, default_hotels)
-        
-        # Formatar no padrão Amadeus
-        simulated_data = []
-        for hotel in hotels_data:
-            simulated_data.append({
-                'hotel': {
-                    'name': hotel['name'],
-                    'cityCode': cityCode
-                },
-                'offers': [{
-                    'price': {
-                        'total': str(hotel['price']),
-                        'currency': 'EUR'
-                    },
-                    'checkInDate': checkInDate,
-                    'checkOutDate': checkOutDate
-                }]
-            })
-        
-        return simulated_data
+        try:
+            # Buscar hotéis usando API real do Amadeus
+            response = self.client.shopping.hotel_offers_search.get(
+                cityCode=cityCode,
+                checkInDate=checkInDate,
+                checkOutDate=checkOutDate,
+                roomQuantity=roomQuantity,
+                adults=1
+            )
+            return response.data
+        except ResponseError as e:
+            error_detail = str(e)
+            print(f"[ERROR] Amadeus hotel API error: {error_detail}", flush=True)
+            return {'error': f'Amadeus API: {error_detail[:150]}'}
