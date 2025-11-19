@@ -2,13 +2,13 @@
 Flask API - Flight & Hotel Chatbot
 Integrado com Azure CLU, Text Analytics, Cosmos DB e Amadeus
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import bot
 import os
 import sys
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../../frontend/webchat', static_url_path='')
 CORS(app)
 
 @app.route('/api/chat', methods=['POST'])
@@ -42,15 +42,21 @@ def health():
 
 @app.route('/', methods=['GET'])
 def index():
-    """Root endpoint"""
+    """Serve frontend HTML"""
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/api', methods=['GET'])
+def api_info():
+    """API info endpoint"""
     return jsonify({
         'service': 'Flight & Hotel Chatbot API',
         'version': '1.0',
         'status': 'running',
         'endpoints': {
+            'GET /': 'Interface do chatbot',
+            'GET /api': 'Informações da API',
             'POST /api/chat': 'Enviar mensagem ao chatbot',
-            'GET /health': 'Status do serviço',
-            'GET /': 'Informações da API'
+            'GET /health': 'Status do serviço'
         }
     })
 
