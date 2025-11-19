@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+*.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+local/
+*.bat
+run_server.py
+start.bat
+test_*.py
+test_*.html
+
+# Documentation (keep only README.md)
+DOCUMENTACAO.md
+STATUS_FINAL.md
+REQUISITOS.md
+O_QUE_FALTA.md
+GUIA_TESTE_FINAL.md
+CORRECOES_FINAIS.md
+docs/
+
+# Logs
+*.log
+logs/
+
+# Azure
+.azure/
+
+# Node modules (se houver frontend com npm)
+node_modules/
+package-lock.json
